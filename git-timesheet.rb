@@ -17,7 +17,11 @@ OptionParser.new do |opts|
   end
   
   opts.on("-a", "--author [EMAIL]", "User for the report (default is the author set in git config)") do |author|
-    options[:author] = author
+    options[:author] = author.split(',')
+  end
+  
+  opts.on("-r", "--repository [DIRECTORY]", "The directory of the repository") do |repository|
+    options[:repository] = repository.split(',')
   end
 
   opts.on(nil, '--authors', 'List all available authors') do |authors|
@@ -26,19 +30,43 @@ OptionParser.new do |opts|
 end.parse!
 
 options[:since] ||= '1 week ago'
+options[:repository] ||= Dir.pwd.split(',')
 
 if options[:authors]
-  authors = `git log --no-merges --simplify-merges --format="%an (%ae)" --since="#{options[:since].gsub('"','\\"')}"`.strip.split("\n").uniq
-  puts authors.join("\n")
+  authors = options[:repository].inject([]) {|authors, repository|
+      current_authors = Dir.chdir(repository) {
+        `git log --no-merges --simplify-merges --format="%an (%ae)" --since="#{options[:since].gsub('"','\\"')}"`.strip.split("\n").uniq
+      }
+      authors.concat(current_authors)
+      authors
+  }
+  puts authors.uniq.join("\n")
 else
-  options[:author] ||= `git config --get user.email`.strip
-  log_lines = `git log --no-merges --simplify-merges --author="#{options[:author].gsub('"','\\"')}" --format="%ad %s <%h>" --date=iso --since="#{options[:since].gsub('"','\\"')}"`.split("\n")
-  day_entries = log_lines.inject({}) {|days, line|
+  options[:author] ||= nil
+  authors = options[:author] ? options[:author].collect{ |author| "--author=" + author.gsub('"','\\"') }:[]
+  log_lines = options[:repository].inject([]) {|log_lines, repository|
+      lines = Dir.chdir(repository) {
+        `git log --no-merges --simplify-merges #{authors.join(' ')} --format="%ad %s <%h>" --date=iso --since="#{options[:since].gsub('"','\\"')}"`.split("\n")
+      }
+      log_lines.concat(lines)
+      log_lines
+  }
+  month_entries = log_lines.inject({}) {|months, line|
     timestamp = Time.parse line.slice!(0,25)
     day = timestamp.strftime("%Y-%m-%d")
-    days[day] ||= []
-    days[day] << timestamp.strftime("%H:%M ") + line.strip
-    days
+    month = timestamp.strftime("%Y-%m")
+    months[month] ||= []
+    months[month].push(day) unless months[month].include?(day)
+    months
   }.sort{|a,b| a[0]<=>b[0]}
-  puts day_entries.map{|day, entries| "#{day}\n#{'='*10}\n\n#{entries.sort.join("\n")}\n\n"}
+  puts month_entries.map{|month, entries| "#{month} - #{entries.length} day(s)\n#{'='*10}\n\n#{entries.sort.join("\n")}\n\n"}
+
+#  day_entries = log_lines.inject({}) {|days, line|
+#    timestamp = Time.parse line.slice!(0,25)
+#    day = timestamp.strftime("%Y-%m-%d")
+#    days[day] ||= []
+#    days[day] << timestamp.strftime("%H:%M ") + line.strip
+#    days
+#  }.sort{|a,b| a[0]<=>b[0]}
+#  puts day_entries.map{|day, entries| "#{day}\n#{'='*10}\n\n#{entries.sort.join("\n")}\n\n"}
 end
